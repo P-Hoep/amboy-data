@@ -173,15 +173,15 @@
             let allData = [];
             let tooltip = null;
 
-            // Initialize the tooltip
+            // Create tooltip
             function createTooltip() {
                 tooltip = document.createElement('div');
                 tooltip.className = 'tooltip';
                 document.body.appendChild(tooltip);
             }
 
-            // Format a date for display
-            function formatDateForDisplay(dateString) {
+            // Format date for display
+            function formatDate(dateString) {
                 const date = new Date(dateString);
                 return new Intl.DateTimeFormat('en-US', {
                     year: 'numeric',
@@ -193,117 +193,145 @@
                 }).format(date);
             }
 
-            // Load data from history.json and API
+            // Load both historical and recent data
             async function loadData() {
-                errorContainer.style.display = 'none';
-                loadingElement.style.display = 'block';
-                timelineContainer.innerHTML = '';
-                timelineContainer.appendChild(loadingElement);
-
                 try {
-                    // Load historical data
+                    // Hide any previous errors
+                    errorContainer.style.display = 'none';
+
+                    // 1. Load historical data from history.json - ALL OF IT
                     const historyResponse = await fetch('history.json');
-                    if (!historyResponse.ok) {
-                        throw new Error('Failed to load history data');
-                    }
                     const historyData = await historyResponse.json();
 
-                    // Debug the structure - log to console
-                    console.log('History data structure:', historyData);
+                    // Get all the data regardless of structure
+                    let historicalValues = [];
+                    let siteInfo = { siteName: "USGS Site" };
+                    let varInfo = { variableName: "Water Level" };
+                    let unitInfo = { unitCode: "ft" };
+                    let siteCode = "";
+                    let parameterCode = "";
 
-                    // Check if the expected structure exists before accessing it
-                    if (!historyData.timeSeries || !historyData.timeSeries.length) {
-                        throw new Error('Invalid data structure: timeSeries array is empty or missing');
+                    // Try to find the time series data regardless of structure
+                    let timeSeries = null;
+                    if (historyData.value && historyData.value.timeSeries && historyData.value.timeSeries.length > 0) {
+                        timeSeries = historyData.value.timeSeries[0];
+                    } else if (historyData.timeSeries && historyData.timeSeries.length > 0) {
+                        timeSeries = historyData.timeSeries[0];
                     }
 
-                    const timeSeries = historyData.timeSeries[0];
+                    if (timeSeries) {
+                        // Get site info
+                        if (timeSeries.sourceInfo) {
+                            siteInfo = timeSeries.sourceInfo;
+                            if (timeSeries.sourceInfo.siteCode && timeSeries.sourceInfo.siteCode.length > 0) {
+                                siteCode = timeSeries.sourceInfo.siteCode[0].value;
+                            }
+                        }
 
-                    if (!timeSeries.values || !timeSeries.values.length) {
-                        throw new Error('Invalid data structure: values array is empty or missing');
+                        // Get variable info
+                        if (timeSeries.variable) {
+                            varInfo = timeSeries.variable;
+                            unitInfo = timeSeries.variable.unit || unitInfo;
+                            if (timeSeries.variable.variableCode && timeSeries.variable.variableCode.length > 0) {
+                                parameterCode = timeSeries.variable.variableCode[0].value;
+                            }
+                        }
+
+                        // Get ALL the historical values - make sure to get every single data point
+                        if (timeSeries.values && timeSeries.values.length > 0) {
+                            for (let valueSet of timeSeries.values) {
+                                if (valueSet.value && Array.isArray(valueSet.value)) {
+                                    // Add all values from this set
+                                    const values = valueSet.value.map(item => ({
+                                        dateTime: item.dateTime,
+                                        value: parseFloat(item.value),
+                                        qualifiers: Array.isArray(item.qualifiers) ? item.qualifiers.join(',') : ''
+                                    }));
+                                    historicalValues = [...historicalValues, ...values];
+                                }
+                            }
+                        }
                     }
 
-                    if (!timeSeries.values[0].value) {
-                        throw new Error('Invalid data structure: value array is missing');
+                    // Set site info display
+                    siteInfoElement.textContent =
+                        `${siteInfo.siteName || 'Unknown Site'} - ` +
+                        `${varInfo.variableName || 'Water Level'} ` +
+                        `(${unitInfo.unitCode || 'ft'})`;
+
+                    // Log how many historical values we found - DEVELOPMENT ONLY
+                    console.log(`Found ${historicalValues.length} historical values spanning ${historicalValues.length > 0 ? new Date(historicalValues[0].dateTime).getFullYear() : 'no'} to ${historicalValues.length > 0 ? new Date(historicalValues[historicalValues.length - 1].dateTime).getFullYear() : 'no'} years`);
+
+                    // 2. Load recent data since 01/01/2025 if we have site and parameter codes
+                    let recentValues = [];
+                    if (siteCode && parameterCode) {
+                        const startDate = "2025-01-01";
+                        const endDate = new Date().toISOString().split('T')[0]; // Today
+
+                        const apiUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteCode}&parameterCd=${parameterCode}&startDT=${startDate}&endDT=${endDate}`;
+
+                        try {
+                            // Fetch recent data
+                            const recentResponse = await fetch(apiUrl);
+                            const recentData = await recentResponse.json();
+
+                            // Extract recent data values
+                            if (recentData.value && recentData.value.timeSeries && recentData.value.timeSeries.length > 0) {
+                                const timeSeries = recentData.value.timeSeries[0];
+                                if (timeSeries.values && timeSeries.values.length > 0 && timeSeries.values[0].value) {
+                                    recentValues = timeSeries.values[0].value.map(item => ({
+                                        dateTime: item.dateTime,
+                                        value: parseFloat(item.value),
+                                        qualifiers: Array.isArray(item.qualifiers) ? item.qualifiers.join(',') : ''
+                                    }));
+                                }
+                            }
+                        } catch (apiError) {
+                            // If API fails, just continue with historical data
+                            console.error("Error fetching recent data:", apiError);
+                        }
                     }
 
-                    // Process historical data with proper error checking
-                    const historicalValues = timeSeries.values[0].value.map(item => ({
-                        dateTime: item.dateTime,
-                        value: parseFloat(item.value),
-                        qualifiers: Array.isArray(item.qualifiers) ? item.qualifiers.join(',') : ''
-                    }));
+                    // Combine historical and recent data - make sure we have all the data
+                    allData = [...historicalValues, ...recentValues];
 
-                    // Get site info from historical data with proper error checking
-                    let siteInfoText = 'Site Information';
-                    if (timeSeries.sourceInfo) {
-                        const siteInfo = timeSeries.sourceInfo;
-                        const variableInfo = timeSeries.variable || {};
-                        const unitInfo = variableInfo.unit || {};
-
-                        siteInfoText = `${siteInfo.siteName || 'Unknown Site'} - `;
-                        siteInfoText += `${variableInfo.variableName || 'Unknown Variable'} `;
-                        siteInfoText += `(${unitInfo.unitCode || 'Unknown Units'})`;
-                    }
-
-                    siteInfoElement.textContent = siteInfoText;
-
-                    // Combine data
-                    allData = historicalValues;
-
-                    // Process and display data
-                    processData();
+                    // Display data
+                    displayData();
 
                 } catch (error) {
-                    console.error('Error loading data:', error);
                     errorContainer.textContent = `Error: ${error.message}`;
                     errorContainer.style.display = 'block';
                     loadingElement.style.display = 'none';
                 }
             }
 
-            // Process and display the data
-            function processData() {
-                try {
-                    if (allData.length === 0) {
-                        throw new Error('No data to display');
-                    }
-
-                    // Group data by year
-                    const yearGroups = groupDataByYear(allData);
-
-                    // Clear loading indicator
-                    loadingElement.style.display = 'none';
-                    timelineContainer.innerHTML = '';
-
-                    // Display data for each year
-                    Object.keys(yearGroups).sort().reverse().forEach(year => {
-                        createYearTimeline(year, yearGroups[year]);
-                    });
-
-                } catch (error) {
-                    console.error('Error processing data:', error);
-                    errorContainer.textContent = `Error processing data: ${error.message}`;
+            // Process and display data
+            function displayData() {
+                if (allData.length === 0) {
+                    errorContainer.textContent = 'No data available';
                     errorContainer.style.display = 'block';
                     loadingElement.style.display = 'none';
+                    return;
                 }
-            }
 
-            // Group data by year
-            function groupDataByYear(data) {
+                // Group by year
                 const yearGroups = {};
-
-                data.forEach(item => {
-                    const date = new Date(item.dateTime);
-                    const year = date.getFullYear();
-
+                allData.forEach(item => {
+                    const year = new Date(item.dateTime).getFullYear();
                     if (!yearGroups[year]) {
                         yearGroups[year] = [];
                     }
-
                     yearGroups[year].push(item);
                 });
 
-                return yearGroups;
+                // Clear loading and display timelines
+                loadingElement.style.display = 'none';
+                timelineContainer.innerHTML = '';
+
+                // Create timeline for each year
+                Object.keys(yearGroups).sort().reverse().forEach(year => {
+                    createYearTimeline(year, yearGroups[year]);
+                });
             }
 
             // Create a timeline for a specific year
@@ -362,7 +390,7 @@
 
                 timeline.appendChild(monthGrid);
 
-                // Get year boundaries for positioning
+                // Calculate year boundaries for positioning
                 const yearStart = new Date(`${year}-01-01T00:00:00`);
                 const yearEnd = new Date(`${year}-12-31T23:59:59`);
                 const yearDuration = yearEnd.getTime() - yearStart.getTime();
@@ -375,24 +403,23 @@
                     const date = new Date(item.dateTime);
                     const position = (date.getTime() - yearStart.getTime()) / yearDuration;
 
-                    // Create data point element
+                    // Create data point
                     const dataPoint = document.createElement('div');
                     dataPoint.className = 'data-point';
 
                     // Position horizontally based on date
                     dataPoint.style.left = `${position * 100}%`;
 
-                    // Scale height based on fixed range
+                    // Scale height based on value
                     const heightPercentage = Math.min((item.value / fixedMax) * 100, 100);
                     dataPoint.style.height = `${heightPercentage}%`;
 
-                    // Add hover data
+                    // Store data for tooltip
                     dataPoint.dataset.value = item.value;
                     dataPoint.dataset.date = item.dateTime;
                     dataPoint.dataset.qualifiers = item.qualifiers;
-                    dataPoint.dataset.scaledValue = (item.value / fixedMax).toFixed(2);
 
-                    // Add event listeners for tooltip
+                    // Add tooltip events
                     dataPoint.addEventListener('mouseover', showTooltip);
                     dataPoint.addEventListener('mousemove', moveTooltip);
                     dataPoint.addEventListener('mouseout', hideTooltip);
@@ -408,14 +435,13 @@
             function showTooltip(event) {
                 const dataPoint = event.target;
                 const value = dataPoint.dataset.value;
-                const date = formatDateForDisplay(dataPoint.dataset.date);
+                const date = formatDate(dataPoint.dataset.date);
                 const qualifiers = dataPoint.dataset.qualifiers || 'None';
 
                 tooltip.innerHTML = `
                     <div>${date}</div>
-                    <div>Value: ${value} ft (${(value / 25).toFixed(2)} of scale)</div>
+                    <div>Value: ${value} ft</div>
                     <div>Qualifiers: ${qualifiers}</div>
-                    <div>Scale: 0-25 ft</div>
                 `;
 
                 tooltip.style.display = 'block';
@@ -423,11 +449,8 @@
             }
 
             function moveTooltip(event) {
-                const x = event.pageX + 10;
-                const y = event.pageY - 30;
-
-                tooltip.style.left = `${x}px`;
-                tooltip.style.top = `${y}px`;
+                tooltip.style.left = `${event.pageX + 10}px`;
+                tooltip.style.top = `${event.pageY - 30}px`;
             }
 
             function hideTooltip() {
@@ -441,37 +464,28 @@
                     return;
                 }
 
-                // Create CSV header
-                let csvContent = 'DateTime,Value,Qualifiers\n';
-
-                // Add data rows
+                // Create CSV content
+                let csv = 'DateTime,Value,Qualifiers\n';
                 allData.forEach(item => {
-                    csvContent += `${item.dateTime},${item.value},${item.qualifiers}\n`;
+                    csv += `${item.dateTime},${item.value},${item.qualifiers}\n`;
                 });
 
                 // Create download link
-                const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+                const blob = new Blob([csv], { type: 'text/csv' });
                 const url = URL.createObjectURL(blob);
                 const link = document.createElement('a');
-                link.setAttribute('href', url);
-                link.setAttribute('download', 'usgs_water_data.csv');
-                link.style.visibility = 'hidden';
+                link.href = url;
+                link.download = 'water_data.csv';
+                link.style.display = 'none';
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
             }
 
-            // Initialize the application
-            function init() {
-                createTooltip();
-                loadData();
-
-                // Add event listener
-                exportCsvButton.addEventListener('click', exportToCsv);
-            }
-
-            // Start the application
-            init();
+            // Initialize
+            createTooltip();
+            loadData();
+            exportCsvButton.addEventListener('click', exportToCsv);
         });
     </script>
 </body>
