@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>USGS Water Level Timeline</title>
+    <title>USGS Water Level Timeline with Weather Data</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -65,6 +65,29 @@
         .year-stats {
             font-size: 0.9em;
             color: #7f8c8d;
+        }
+
+        .weather-stats {
+            font-size: 0.9em;
+            color: #e67e22;
+            margin-bottom: 5px;
+            padding: 4px 8px;
+            background-color: #fff9e6;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .weekly-weather {
+            position: absolute;
+            top: -20px;
+            font-size: 9px;
+            color: #e67e22;
+            background-color: rgba(255, 249, 230, 0.9);
+            border-radius: 2px;
+            padding: 2px 4px;
+            z-index: 5;
+            white-space: nowrap;
         }
 
         .timeline {
@@ -136,6 +159,7 @@
             border-radius: 4px;
             cursor: pointer;
             transition: background-color 0.2s;
+            margin-left: 10px;
         }
 
         button:hover {
@@ -199,7 +223,7 @@
 
 <body>
     <div class="container">
-        <h1>USGS Water Level Timeline</h1>
+        <h1>USGS Water Level Timeline with Weather Data</h1>
         <div class="site-info" id="site-info">Loading site information...</div>
 
         <div class="historical-comparison" id="historical-comparison">
@@ -209,6 +233,7 @@
 
         <div class="controls">
             <button id="export-csv">Export to CSV</button>
+            <button id="toggle-weather">Toggle Weather Stats</button>
         </div>
 
         <div id="error-container" class="error" style="display: none;"></div>
@@ -227,14 +252,17 @@
             const siteInfoElement = document.getElementById('site-info');
             const errorContainer = document.getElementById('error-container');
             const exportCsvButton = document.getElementById('export-csv');
+            const toggleWeatherButton = document.getElementById('toggle-weather');
             const progressElement = document.getElementById('progress');
             const yesterdayStatsElement = document.getElementById('yesterday-stats');
 
             // State variables
             let allData = [];
+            let weatherData = {};
             let tooltip = null;
             let siteCode = "";
             let parameterCode = "";
+            let showWeather = true;
 
             // Create tooltip
             function createTooltip() {
@@ -301,6 +329,84 @@
                 return { values, siteInfo };
             }
 
+            // Load weather data for a specific year
+            async function loadWeatherData(year) {
+                try {
+                    const response = await fetch(`/weather_data/weather_data_${year}.json`);
+                    if (!response.ok) {
+                        throw new Error(`Failed to load weather data for ${year}`);
+                    }
+                    return await response.json();
+                } catch (error) {
+                    console.error(`Error loading weather data for ${year}:`, error);
+                    return [];
+                }
+            }
+
+            // Group weather data by weeks
+            function groupWeatherDataByWeeks(yearWeatherData) {
+                if (!yearWeatherData || yearWeatherData.length === 0) {
+                    return [];
+                }
+
+                // Sort data by date
+                yearWeatherData.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+                // Group into weeks (Sun-Sat)
+                const weeks = [];
+                let currentWeek = [];
+                let currentWeekNumber = -1;
+
+                yearWeatherData.forEach(day => {
+                    const date = new Date(day.date);
+                    // Get week of year (0-51)
+                    const weekNumber = Math.floor((date.getTime() - new Date(date.getFullYear(), 0, 1).getTime()) / (7 * 24 * 60 * 60 * 1000));
+
+                    if (weekNumber !== currentWeekNumber) {
+                        if (currentWeek.length > 0) {
+                            // Calculate weekly averages
+                            const totalTempC = currentWeek.reduce((sum, d) => sum + d.avg_temperature_celsius, 0);
+                            const totalTempF = currentWeek.reduce((sum, d) => sum + d.avg_temperature_fahrenheit, 0);
+                            const totalPrecip = currentWeek.reduce((sum, d) => sum + d.precipitation_mm, 0);
+
+                            weeks.push({
+                                weekNumber: currentWeekNumber,
+                                startDate: currentWeek[0].date,
+                                endDate: currentWeek[currentWeek.length - 1].date,
+                                avgTempC: totalTempC / currentWeek.length,
+                                avgTempF: totalTempF / currentWeek.length,
+                                totalPrecipitation: totalPrecip,
+                                days: currentWeek
+                            });
+                        }
+
+                        currentWeekNumber = weekNumber;
+                        currentWeek = [day];
+                    } else {
+                        currentWeek.push(day);
+                    }
+                });
+
+                // Add the last week
+                if (currentWeek.length > 0) {
+                    const totalTempC = currentWeek.reduce((sum, d) => sum + d.avg_temperature_celsius, 0);
+                    const totalTempF = currentWeek.reduce((sum, d) => sum + d.avg_temperature_fahrenheit, 0);
+                    const totalPrecip = currentWeek.reduce((sum, d) => sum + d.precipitation_mm, 0);
+
+                    weeks.push({
+                        weekNumber: currentWeekNumber,
+                        startDate: currentWeek[0].date,
+                        endDate: currentWeek[currentWeek.length - 1].date,
+                        avgTempC: totalTempC / currentWeek.length,
+                        avgTempF: totalTempF / currentWeek.length,
+                        totalPrecipitation: totalPrecip,
+                        days: currentWeek
+                    });
+                }
+
+                return weeks;
+            }
+
             // Load data from all sources
             async function loadData() {
                 try {
@@ -315,6 +421,12 @@
 
                     // Progress tracking
                     progressElement.textContent = `Loading years: `;
+
+                    // Load weather data promises
+                    const weatherPromises = [];
+                    for (let year = startYear; year <= endYear; year++) {
+                        weatherPromises.push(loadWeatherData(year).then(data => ({ year, data })));
+                    }
 
                     // Load each year's data in parallel
                     const yearPromises = [];
@@ -348,7 +460,21 @@
                     }
 
                     // Wait for all years to load
-                    const results = await Promise.all(yearPromises);
+                    const [weatherResults, results] = await Promise.all([
+                        Promise.all(weatherPromises),
+                        Promise.all(yearPromises)
+                    ]);
+
+                    // Process weather data
+                    weatherResults.forEach(result => {
+                        if (result.data && result.data.length > 0) {
+                            const weeklyData = groupWeatherDataByWeeks(result.data);
+                            weatherData[result.year] = {
+                                data: result.data,
+                                weeklyData: weeklyData
+                            };
+                        }
+                    });
 
                     // Combine all year data
                     results.forEach(result => {
@@ -396,7 +522,7 @@
                     }
 
                     // Display final stats
-                    progressElement.textContent = `Loaded ${allData.length.toLocaleString()} data points from ${startYear} to present`;
+                    progressElement.textContent = `Loaded ${allData.length.toLocaleString()} data points and weather data for ${Object.keys(weatherData).length} years`;
 
                     // Display data
                     displayData();
@@ -436,7 +562,7 @@
 
                 // Create timeline for each year
                 Object.keys(yearGroups).sort().reverse().forEach(year => {
-                    createYearTimeline(year, yearGroups[year]);
+                    createYearTimeline(parseInt(year), yearGroups[year]);
                 });
             }
 
@@ -465,6 +591,8 @@
                     </span>
                 `;
                 yearContainer.appendChild(yearLabel);
+
+                // We'll add the weekly weather stats directly to the timeline
 
                 // Create month labels
                 const monthLabels = document.createElement('div');
@@ -501,8 +629,28 @@
                 const yearEnd = new Date(`${year}-12-31T23:59:59`);
                 const yearDuration = yearEnd.getTime() - yearStart.getTime();
 
-                // Use fixed scale of 0-25 feet
+                // Use fixed scale of 0-30 feet
                 const fixedMax = 30;
+
+                // Add weekly weather stats first
+                if (showWeather && weatherData[year] && weatherData[year].weeklyData) {
+                    weatherData[year].weeklyData.forEach(weekData => {
+                        const weekStartDate = new Date(weekData.startDate);
+                        const weekEndDate = new Date(weekData.endDate);
+
+                        // Calculate position (center of the week)
+                        const weekMidPoint = new Date((weekStartDate.getTime() + weekEndDate.getTime()) / 2);
+                        const position = (weekMidPoint.getTime() - yearStart.getTime()) / yearDuration;
+
+                        // Create weather stats element
+                        const weeklyWeather = document.createElement('div');
+                        weeklyWeather.className = 'weekly-weather';
+                        weeklyWeather.style.left = `${position * 100}%`;
+                        weeklyWeather.innerHTML = `Week ${weekData.weekNumber + 1}: ${weekData.avgTempF.toFixed(1)}°F | ${weekData.totalPrecipitation.toFixed(1)}mm`;
+
+                        timeline.appendChild(weeklyWeather);
+                    });
+                }
 
                 // Add data points
                 yearData.forEach(item => {
@@ -525,6 +673,18 @@
                     dataPoint.dataset.date = item.dateTime;
                     dataPoint.dataset.qualifiers = item.qualifiers;
 
+                    // Store weather data if available for this date
+                    if (weatherData[year] && weatherData[year].data) {
+                        const dateString = date.toISOString().split('T')[0];
+                        const dayWeather = weatherData[year].data.find(wd => wd.date === dateString);
+
+                        if (dayWeather) {
+                            dataPoint.dataset.tempC = dayWeather.avg_temperature_celsius;
+                            dataPoint.dataset.tempF = dayWeather.avg_temperature_fahrenheit;
+                            dataPoint.dataset.precip = dayWeather.precipitation_mm;
+                        }
+                    }
+
                     // Add tooltip events
                     dataPoint.addEventListener('mouseover', showTooltip);
                     dataPoint.addEventListener('mousemove', moveTooltip);
@@ -544,12 +704,21 @@
                 const date = formatDate(dataPoint.dataset.date);
                 const qualifiers = dataPoint.dataset.qualifiers || 'None';
 
-                tooltip.innerHTML = `
+                let tooltipHTML = `
                     <div>${date}</div>
-                    <div>Value: ${value} ft</div>
+                    <div>Water Level: ${value} ft</div>
                     <div>Qualifiers: ${qualifiers}</div>
                 `;
 
+                // Add weather data if available
+                if (dataPoint.dataset.tempF) {
+                    tooltipHTML += `
+                        <div>Temperature: ${parseFloat(dataPoint.dataset.tempF).toFixed(1)}°F (${parseFloat(dataPoint.dataset.tempC).toFixed(1)}°C)</div>
+                        <div>Precipitation: ${parseFloat(dataPoint.dataset.precip).toFixed(1)} mm</div>
+                    `;
+                }
+
+                tooltip.innerHTML = tooltipHTML;
                 tooltip.style.display = 'block';
                 moveTooltip(event);
             }
@@ -732,10 +901,18 @@
                 document.body.removeChild(link);
             }
 
+            // Toggle weather stats display
+            function toggleWeather() {
+                showWeather = !showWeather;
+                displayData();
+                toggleWeatherButton.textContent = showWeather ? 'Hide Weather Stats' : 'Show Weather Stats';
+            }
+
             // Initialize
             createTooltip();
             loadData();
             exportCsvButton.addEventListener('click', exportToCsv);
+            toggleWeatherButton.addEventListener('click', toggleWeather);
         });
     </script>
 </body>
