@@ -148,6 +148,52 @@
             color: #7f8c8d;
             margin-top: 10px;
         }
+
+        .historical-comparison {
+            background-color: #eaf2f8;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        .historical-comparison h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+            color: #2c3e50;
+            text-align: center;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            margin-top: 10px;
+        }
+
+        .stat-card {
+            background-color: white;
+            padding: 10px;
+            border-radius: 4px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #3498db;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: #7f8c8d;
+        }
+
+        .comparison-highlight {
+            font-weight: bold;
+            color: #e74c3c;
+        }
     </style>
 </head>
 
@@ -155,6 +201,11 @@
     <div class="container">
         <h1>USGS Water Level Timeline</h1>
         <div class="site-info" id="site-info">Loading site information...</div>
+
+        <div class="historical-comparison" id="historical-comparison">
+            <h3>Historical Comparison</h3>
+            <div id="yesterday-stats">Loading historical comparison...</div>
+        </div>
 
         <div class="controls">
             <button id="export-csv">Export to CSV</button>
@@ -177,6 +228,7 @@
             const errorContainer = document.getElementById('error-container');
             const exportCsvButton = document.getElementById('export-csv');
             const progressElement = document.getElementById('progress');
+            const yesterdayStatsElement = document.getElementById('yesterday-stats');
 
             // State variables
             let allData = [];
@@ -349,6 +401,9 @@
                     // Display data
                     displayData();
 
+                    // Calculate and display historical comparison
+                    calculateHistoricalComparison();
+
                 } catch (error) {
                     errorContainer.textContent = `Error: ${error.message}`;
                     errorContainer.style.display = 'block';
@@ -506,6 +561,150 @@
 
             function hideTooltip() {
                 tooltip.style.display = 'none';
+            }
+
+            // Helper function for ordinal suffixes
+            function getOrdinalSuffix(n) {
+                const s = ["th", "st", "nd", "rd"];
+                const v = n % 100;
+                return (s[(v - 20) % 10] || s[v] || s[0]);
+            }
+
+            // Calculate historical comparison for yesterday's date
+            function calculateHistoricalComparison() {
+                if (allData.length === 0) {
+                    yesterdayStatsElement.textContent = 'No data available for comparison';
+                    return;
+                }
+
+                // Get yesterday's date (month and day only)
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                const yesterdayMonth = yesterday.getMonth();
+                const yesterdayDay = yesterday.getDate();
+                const currentYear = yesterday.getFullYear();
+
+                // Group data by year for the same month/day
+                const yearData = {};
+
+                // Collect all values for the same day/month across years
+                allData.forEach(item => {
+                    const date = new Date(item.dateTime);
+                    const month = date.getMonth();
+                    const day = date.getDate();
+                    const year = date.getFullYear();
+
+                    // If it's the same month and day
+                    if (month === yesterdayMonth && day === yesterdayDay) {
+                        if (!yearData[year]) {
+                            yearData[year] = [];
+                        }
+                        yearData[year].push(item.value);
+                    }
+                });
+
+                // Calculate average for each year
+                const yearlyAverages = [];
+                Object.keys(yearData).forEach(year => {
+                    const values = yearData[year];
+                    if (values.length > 0) {
+                        const average = values.reduce((sum, val) => sum + val, 0) / values.length;
+                        yearlyAverages.push({
+                            year: parseInt(year),
+                            average: average,
+                            count: values.length
+                        });
+                    }
+                });
+
+                // If no historical data found
+                if (yearlyAverages.length === 0) {
+                    yesterdayStatsElement.textContent = `No historical data available for ${yesterday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+                    return;
+                }
+
+                // Find yesterday's data (current year)
+                const yesterdayData = yearlyAverages.find(item => item.year === currentYear);
+
+                // If no data for yesterday
+                if (!yesterdayData) {
+                    yesterdayStatsElement.textContent = `No data available for yesterday (${yesterday.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })})`;
+                    return;
+                }
+
+                // Sort yearly averages from highest to lowest
+                yearlyAverages.sort((a, b) => b.average - a.average);
+
+                // Find rank of yesterday's average (where 1 is the highest)
+                const rank = yearlyAverages.findIndex(item => item.year === currentYear) + 1;
+
+                // Get all yearly averages excluding current year for historical statistics
+                const historicalAverages = yearlyAverages
+                    .filter(item => item.year !== currentYear)
+                    .map(item => item.average);
+
+                // Calculate historical statistics
+                const mean = historicalAverages.reduce((sum, val) => sum + val, 0) / historicalAverages.length;
+
+                // Median
+                const sortedHistorical = [...historicalAverages].sort((a, b) => a - b);
+                const middle = Math.floor(sortedHistorical.length / 2);
+                const median = sortedHistorical.length % 2 === 0
+                    ? (sortedHistorical[middle - 1] + sortedHistorical[middle]) / 2
+                    : sortedHistorical[middle];
+
+                // Mode (round to 0.1ft for reasonable grouping)
+                const roundedValues = historicalAverages.map(val => Math.round(val * 10) / 10);
+                const valueCounts = {};
+                let maxCount = 0;
+                let mode = null;
+
+                roundedValues.forEach(val => {
+                    valueCounts[val] = (valueCounts[val] || 0) + 1;
+                    if (valueCounts[val] > maxCount) {
+                        maxCount = valueCounts[val];
+                        mode = val;
+                    }
+                });
+
+                // Format date string
+                const dateString = yesterday.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+
+                // Create the HTML output
+                let html = `
+                    <p>Yesterday's water level (${dateString}) compared to the same date across ${historicalAverages.length} years of historical data:</p>
+                    
+                    <div class="stat-grid">
+                        <div class="stat-card">
+                            <div class="stat-value">${yesterdayData.average.toFixed(2)} ft</div>
+                            <div class="stat-label">Yesterday's Average</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${rank} of ${yearlyAverages.length}</div>
+                            <div class="stat-label">Historical Rank</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${mean.toFixed(2)} ft</div>
+                            <div class="stat-label">Historical Mean</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${median.toFixed(2)} ft</div>
+                            <div class="stat-label">Historical Median</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${mode !== null ? mode.toFixed(1) : 'N/A'} ft</div>
+                            <div class="stat-label">Historical Mode</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value">${(yesterdayData.average - mean).toFixed(2)} ft</div>
+                            <div class="stat-label">Difference from Mean</div>
+                        </div>
+                    </div>
+                    
+                    <p>Water level is <span class="comparison-highlight">${rank === 1 ? '1st highest' : rank + getOrdinalSuffix(rank) + ' highest'}</span> out of ${yearlyAverages.length} years for this date.</p>
+                `;
+
+                yesterdayStatsElement.innerHTML = html;
             }
 
             // Export data to CSV
