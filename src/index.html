@@ -332,7 +332,7 @@
             // Load weather data for a specific year
             async function loadWeatherData(year) {
                 try {
-                    const response = await fetch(`/weather_data/weather_data_${year}.json`);
+                    const response = await fetch(`public/weather_data_${year}.json`);
                     if (!response.ok) {
                         throw new Error(`Failed to load weather data for ${year}`);
                     }
@@ -431,7 +431,7 @@
                     // Load each year's data in parallel
                     const yearPromises = [];
                     for (let year = startYear; year <= endYear; year++) {
-                        const yearPromise = fetch(`usgs_data/${year}.json`)
+                        const yearPromise = fetch(`public/${year}.json`)
                             .then(response => {
                                 if (!response.ok) {
                                     throw new Error(`Failed to load data for ${year}`);
