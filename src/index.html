@@ -141,6 +141,13 @@
         button:hover {
             background-color: #2980b9;
         }
+
+        .progress {
+            text-align: center;
+            padding: 10px;
+            color: #7f8c8d;
+            margin-top: 10px;
+        }
     </style>
 </head>
 
@@ -154,6 +161,7 @@
         </div>
 
         <div id="error-container" class="error" style="display: none;"></div>
+        <div id="progress" class="progress"></div>
 
         <div id="timeline-container">
             <div id="loading" class="loading">Loading data...</div>
@@ -168,10 +176,13 @@
             const siteInfoElement = document.getElementById('site-info');
             const errorContainer = document.getElementById('error-container');
             const exportCsvButton = document.getElementById('export-csv');
+            const progressElement = document.getElementById('progress');
 
             // State variables
             let allData = [];
             let tooltip = null;
+            let siteCode = "";
+            let parameterCode = "";
 
             // Create tooltip
             function createTooltip() {
@@ -193,107 +204,147 @@
                 }).format(date);
             }
 
-            // Load both historical and recent data
+            // Extract values from USGS JSON response
+            function extractValuesFromJson(data) {
+                let values = [];
+                let siteInfo = {};
+
+                try {
+                    // Handle different JSON structures
+                    let timeSeries;
+                    if (data.value && data.value.timeSeries && data.value.timeSeries.length > 0) {
+                        timeSeries = data.value.timeSeries[0];
+                    } else if (data.timeSeries && data.timeSeries.length > 0) {
+                        timeSeries = data.timeSeries[0];
+                    }
+
+                    if (!timeSeries) return { values, siteInfo };
+
+                    // Get site info if not already set
+                    if (timeSeries.sourceInfo) {
+                        siteInfo = timeSeries.sourceInfo;
+
+                        if (!siteCode && timeSeries.sourceInfo.siteCode && timeSeries.sourceInfo.siteCode.length > 0) {
+                            siteCode = timeSeries.sourceInfo.siteCode[0].value;
+                        }
+                    }
+
+                    // Get parameter code if not already set
+                    if (!parameterCode && timeSeries.variable && timeSeries.variable.variableCode && timeSeries.variable.variableCode.length > 0) {
+                        parameterCode = timeSeries.variable.variableCode[0].value;
+                    }
+
+                    // Get the values
+                    if (timeSeries.values && timeSeries.values.length > 0 && timeSeries.values[0].value) {
+                        values = timeSeries.values[0].value.map(item => ({
+                            dateTime: item.dateTime,
+                            value: parseFloat(item.value),
+                            qualifiers: Array.isArray(item.qualifiers) ? item.qualifiers.join(',') : ''
+                        }));
+                    }
+                } catch (error) {
+                    console.error("Error extracting values:", error);
+                }
+
+                return { values, siteInfo };
+            }
+
+            // Load data from all sources
             async function loadData() {
                 try {
                     // Hide any previous errors
                     errorContainer.style.display = 'none';
 
-                    // 1. Load historical data from history.json - ALL OF IT
-                    const historyResponse = await fetch('history.json');
-                    const historyData = await historyResponse.json();
+                    // 1. Load years 2010-2024 from individual JSON files
+                    const startYear = 2010;
+                    const endYear = 2024;
+                    let yearlyData = [];
+                    let siteInfo = null;
 
-                    // Get all the data regardless of structure
-                    let historicalValues = [];
-                    let siteInfo = { siteName: "USGS Site" };
-                    let varInfo = { variableName: "Water Level" };
-                    let unitInfo = { unitCode: "ft" };
-                    let siteCode = "";
-                    let parameterCode = "";
+                    // Progress tracking
+                    progressElement.textContent = `Loading years: `;
 
-                    // Try to find the time series data regardless of structure
-                    let timeSeries = null;
-                    if (historyData.value && historyData.value.timeSeries && historyData.value.timeSeries.length > 0) {
-                        timeSeries = historyData.value.timeSeries[0];
-                    } else if (historyData.timeSeries && historyData.timeSeries.length > 0) {
-                        timeSeries = historyData.timeSeries[0];
-                    }
-
-                    if (timeSeries) {
-                        // Get site info
-                        if (timeSeries.sourceInfo) {
-                            siteInfo = timeSeries.sourceInfo;
-                            if (timeSeries.sourceInfo.siteCode && timeSeries.sourceInfo.siteCode.length > 0) {
-                                siteCode = timeSeries.sourceInfo.siteCode[0].value;
-                            }
-                        }
-
-                        // Get variable info
-                        if (timeSeries.variable) {
-                            varInfo = timeSeries.variable;
-                            unitInfo = timeSeries.variable.unit || unitInfo;
-                            if (timeSeries.variable.variableCode && timeSeries.variable.variableCode.length > 0) {
-                                parameterCode = timeSeries.variable.variableCode[0].value;
-                            }
-                        }
-
-                        // Get ALL the historical values - make sure to get every single data point
-                        if (timeSeries.values && timeSeries.values.length > 0) {
-                            for (let valueSet of timeSeries.values) {
-                                if (valueSet.value && Array.isArray(valueSet.value)) {
-                                    // Add all values from this set
-                                    const values = valueSet.value.map(item => ({
-                                        dateTime: item.dateTime,
-                                        value: parseFloat(item.value),
-                                        qualifiers: Array.isArray(item.qualifiers) ? item.qualifiers.join(',') : ''
-                                    }));
-                                    historicalValues = [...historicalValues, ...values];
+                    // Load each year's data in parallel
+                    const yearPromises = [];
+                    for (let year = startYear; year <= endYear; year++) {
+                        const yearPromise = fetch(`usgs_data/${year}.json`)
+                            .then(response => {
+                                if (!response.ok) {
+                                    throw new Error(`Failed to load data for ${year}`);
                                 }
-                            }
-                        }
+                                return response.json();
+                            })
+                            .then(data => {
+                                const { values, siteInfo: yearSiteInfo } = extractValuesFromJson(data);
+
+                                // Store site info from first successful year if not set
+                                if (!siteInfo && yearSiteInfo) {
+                                    siteInfo = yearSiteInfo;
+                                }
+
+                                // Update progress
+                                progressElement.textContent += `${year} `;
+
+                                return { year, values };
+                            })
+                            .catch(error => {
+                                console.error(`Error loading ${year}:`, error);
+                                return { year, values: [] };
+                            });
+
+                        yearPromises.push(yearPromise);
                     }
 
-                    // Set site info display
-                    siteInfoElement.textContent =
-                        `${siteInfo.siteName || 'Unknown Site'} - ` +
-                        `${varInfo.variableName || 'Water Level'} ` +
-                        `(${unitInfo.unitCode || 'ft'})`;
+                    // Wait for all years to load
+                    const results = await Promise.all(yearPromises);
 
-                    // Log how many historical values we found - DEVELOPMENT ONLY
-                    console.log(`Found ${historicalValues.length} historical values spanning ${historicalValues.length > 0 ? new Date(historicalValues[0].dateTime).getFullYear() : 'no'} to ${historicalValues.length > 0 ? new Date(historicalValues[historicalValues.length - 1].dateTime).getFullYear() : 'no'} years`);
+                    // Combine all year data
+                    results.forEach(result => {
+                        if (result.values && result.values.length > 0) {
+                            yearlyData = [...yearlyData, ...result.values];
+                        }
+                    });
 
-                    // 2. Load recent data since 01/01/2025 if we have site and parameter codes
+                    // 2. Load recent data since 01/01/2025
                     let recentValues = [];
                     if (siteCode && parameterCode) {
+                        progressElement.textContent += "| Loading current data...";
+
                         const startDate = "2025-01-01";
                         const endDate = new Date().toISOString().split('T')[0]; // Today
 
                         const apiUrl = `https://waterservices.usgs.gov/nwis/iv/?format=json&sites=${siteCode}&parameterCd=${parameterCode}&startDT=${startDate}&endDT=${endDate}`;
 
                         try {
-                            // Fetch recent data
                             const recentResponse = await fetch(apiUrl);
                             const recentData = await recentResponse.json();
 
-                            // Extract recent data values
-                            if (recentData.value && recentData.value.timeSeries && recentData.value.timeSeries.length > 0) {
-                                const timeSeries = recentData.value.timeSeries[0];
-                                if (timeSeries.values && timeSeries.values.length > 0 && timeSeries.values[0].value) {
-                                    recentValues = timeSeries.values[0].value.map(item => ({
-                                        dateTime: item.dateTime,
-                                        value: parseFloat(item.value),
-                                        qualifiers: Array.isArray(item.qualifiers) ? item.qualifiers.join(',') : ''
-                                    }));
-                                }
-                            }
+                            const { values } = extractValuesFromJson(recentData);
+                            recentValues = values;
+
+                            progressElement.textContent += " done!";
                         } catch (apiError) {
-                            // If API fails, just continue with historical data
                             console.error("Error fetching recent data:", apiError);
+                            progressElement.textContent += " failed!";
                         }
                     }
 
-                    // Combine historical and recent data - make sure we have all the data
-                    allData = [...historicalValues, ...recentValues];
+                    // 3. Combine all data
+                    allData = [...yearlyData, ...recentValues];
+
+                    // Update site info display
+                    if (siteInfo) {
+                        const variableInfo = siteInfo.variable || {};
+                        const unitInfo = variableInfo.unit || {};
+
+                        siteInfoElement.textContent =
+                            `${siteInfo.siteName || 'Unknown Site'} - ` +
+                            `Water Level Data ` +
+                            `(ft)`;
+                    }
+
+                    // Display final stats
+                    progressElement.textContent = `Loaded ${allData.length.toLocaleString()} data points from ${startYear} to present`;
 
                     // Display data
                     displayData();
