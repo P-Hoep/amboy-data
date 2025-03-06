@@ -124,21 +124,8 @@
 
         .controls {
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-end;
             margin-bottom: 20px;
-            flex-wrap: wrap;
-        }
-
-        .date-range-control {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        input[type="date"] {
-            padding: 6px;
-            border-radius: 4px;
-            border: 1px solid #ddd;
         }
 
         button {
@@ -154,18 +141,6 @@
         button:hover {
             background-color: #2980b9;
         }
-
-        @media (max-width: 768px) {
-            .controls {
-                flex-direction: column;
-                gap: 10px;
-            }
-
-            .date-range-control {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-        }
     </style>
 </head>
 
@@ -175,22 +150,13 @@
         <div class="site-info" id="site-info">Loading site information...</div>
 
         <div class="controls">
-            <div class="date-range-control">
-                <label for="start-date">Start Date:</label>
-                <input type="date" id="start-date" value="2024-03-05">
-                <label for="end-date">End Date:</label>
-                <input type="date" id="end-date" value="2025-03-05">
-                <button id="fetch-data">Update Data</button>
-            </div>
-            <div>
-                <button id="export-csv">Export to CSV</button>
-            </div>
+            <button id="export-csv">Export to CSV</button>
         </div>
 
         <div id="error-container" class="error" style="display: none;"></div>
 
         <div id="timeline-container">
-            <div id="loading" class="loading">Loading data from USGS API...</div>
+            <div id="loading" class="loading">Loading data...</div>
         </div>
     </div>
 
@@ -201,9 +167,6 @@
             const loadingElement = document.getElementById('loading');
             const siteInfoElement = document.getElementById('site-info');
             const errorContainer = document.getElementById('error-container');
-            const startDateInput = document.getElementById('start-date');
-            const endDateInput = document.getElementById('end-date');
-            const fetchDataButton = document.getElementById('fetch-data');
             const exportCsvButton = document.getElementById('export-csv');
 
             // State variables
@@ -215,13 +178,6 @@
                 tooltip = document.createElement('div');
                 tooltip.className = 'tooltip';
                 document.body.appendChild(tooltip);
-            }
-
-            // Format a date object to USGS API format
-            function formatDateForApi(date) {
-                const isoString = date.toISOString();
-                // Convert to format YYYY-MM-DDTHH:MM:SS.sss-06:00 (assuming CST timezone)
-                return isoString.slice(0, 23) + '-06:00';
             }
 
             // Format a date for display
@@ -237,42 +193,41 @@
                 }).format(date);
             }
 
-            // Fetch data from USGS API
-            async function fetchWaterData() {
+            // Load data from history.json and API
+            async function loadData() {
                 errorContainer.style.display = 'none';
                 loadingElement.style.display = 'block';
                 timelineContainer.innerHTML = '';
                 timelineContainer.appendChild(loadingElement);
 
                 try {
-                    // Get dates from inputs
-                    const startDate = new Date(startDateInput.value);
-                    const endDate = new Date(endDateInput.value);
-
-                    // Validate date range
-                    if (startDate >= endDate) {
-                        throw new Error('Start date must be before end date');
+                    // Load historical data
+                    const historyResponse = await fetch('history.json');
+                    if (!historyResponse.ok) {
+                        throw new Error('Failed to load history data');
                     }
+                    const historyData = await historyResponse.json();
 
-                    // Format dates for API
-                    const startDT = formatDateForApi(startDate);
-                    const endDT = formatDateForApi(endDate);
+                    // Process historical data
+                    const historicalValues = historyData.timeSeries[0].values[0].value.map(item => ({
+                        dateTime: item.dateTime,
+                        value: parseFloat(item.value),
+                        qualifiers: item.qualifiers.join(',')
+                    }));
 
-                    // Construct USGS API URL
-                    const url = `https://nwis.waterservices.usgs.gov/nwis/iv/?sites=05320000&agencyCd=USGS&startDT=${startDT}&endDT=${endDT}&parameterCd=00065&format=json`;
+                    // Get site info from historical data
+                    const siteInfo = historyData.timeSeries[0].sourceInfo;
+                    const variable = historyData.timeSeries[0].variable;
+                    siteInfoElement.textContent = `${siteInfo.siteName} - ${variable.variableName} (${variable.unit.unitCode})`;
 
-                    // Fetch data
-                    const response = await fetch(url);
+                    // Combine data
+                    allData = historicalValues;
 
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! Status: ${response.status}`);
-                    }
-
-                    const data = await response.json();
-                    processData(data);
+                    // Process and display data
+                    processData();
 
                 } catch (error) {
-                    console.error('Error fetching data:', error);
+                    console.error('Error loading data:', error);
                     errorContainer.textContent = `Error: ${error.message}`;
                     errorContainer.style.display = 'block';
                     loadingElement.style.display = 'none';
@@ -280,22 +235,8 @@
             }
 
             // Process and display the data
-            function processData(data) {
+            function processData() {
                 try {
-                    // Extract site info
-                    const siteInfo = data.value.timeSeries[0].sourceInfo;
-                    const variable = data.value.timeSeries[0].variable;
-
-                    // Update site info display
-                    siteInfoElement.textContent = `${siteInfo.siteName} - ${variable.variableName} (${variable.unit.unitCode})`;
-
-                    // Extract values
-                    allData = data.value.timeSeries[0].values[0].value.map(item => ({
-                        dateTime: item.dateTime,
-                        value: parseFloat(item.value),
-                        qualifiers: item.qualifiers.join(',')
-                    }));
-
                     // Group data by year
                     const yearGroups = groupDataByYear(allData);
 
@@ -395,8 +336,8 @@
                 const yearEnd = new Date(`${year}-12-31T23:59:59`);
                 const yearDuration = yearEnd.getTime() - yearStart.getTime();
 
-                // Find value range for scaling
-                const valueRange = max - min;
+                // Use fixed scale of 0-25 feet
+                const fixedMax = 25;
 
                 // Add data points
                 yearData.forEach(item => {
@@ -410,17 +351,15 @@
                     // Position horizontally based on date
                     dataPoint.style.left = `${position * 100}%`;
 
-                    // Scale height based on value
-                    const heightPercentage = valueRange > 0
-                        ? ((item.value - min) / valueRange) * 100
-                        : 50; // If all values are the same
-
+                    // Scale height based on fixed range
+                    const heightPercentage = Math.min((item.value / fixedMax) * 100, 100);
                     dataPoint.style.height = `${heightPercentage}%`;
 
                     // Add hover data
                     dataPoint.dataset.value = item.value;
                     dataPoint.dataset.date = item.dateTime;
                     dataPoint.dataset.qualifiers = item.qualifiers;
+                    dataPoint.dataset.scaledValue = (item.value / fixedMax).toFixed(2);
 
                     // Add event listeners for tooltip
                     dataPoint.addEventListener('mouseover', showTooltip);
@@ -443,8 +382,9 @@
 
                 tooltip.innerHTML = `
                     <div>${date}</div>
-                    <div>Value: ${value} ft</div>
+                    <div>Value: ${value} ft (${(value/25).toFixed(2)} of scale)</div>
                     <div>Qualifiers: ${qualifiers}</div>
+                    <div>Scale: 0-25 ft</div>
                 `;
 
                 tooltip.style.display = 'block';
@@ -493,10 +433,9 @@
             // Initialize the application
             function init() {
                 createTooltip();
-                fetchWaterData();
+                loadData();
 
-                // Add event listeners
-                fetchDataButton.addEventListener('click', fetchWaterData);
+                // Add event listener
                 exportCsvButton.addEventListener('click', exportToCsv);
             }
 
