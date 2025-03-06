@@ -208,17 +208,44 @@
                     }
                     const historyData = await historyResponse.json();
 
-                    // Process historical data
-                    const historicalValues = historyData.timeSeries[0].values[0].value.map(item => ({
+                    // Debug the structure - log to console
+                    console.log('History data structure:', historyData);
+
+                    // Check if the expected structure exists before accessing it
+                    if (!historyData.timeSeries || !historyData.timeSeries.length) {
+                        throw new Error('Invalid data structure: timeSeries array is empty or missing');
+                    }
+
+                    const timeSeries = historyData.timeSeries[0];
+
+                    if (!timeSeries.values || !timeSeries.values.length) {
+                        throw new Error('Invalid data structure: values array is empty or missing');
+                    }
+
+                    if (!timeSeries.values[0].value) {
+                        throw new Error('Invalid data structure: value array is missing');
+                    }
+
+                    // Process historical data with proper error checking
+                    const historicalValues = timeSeries.values[0].value.map(item => ({
                         dateTime: item.dateTime,
                         value: parseFloat(item.value),
-                        qualifiers: item.qualifiers.join(',')
+                        qualifiers: Array.isArray(item.qualifiers) ? item.qualifiers.join(',') : ''
                     }));
 
-                    // Get site info from historical data
-                    const siteInfo = historyData.timeSeries[0].sourceInfo;
-                    const variable = historyData.timeSeries[0].variable;
-                    siteInfoElement.textContent = `${siteInfo.siteName} - ${variable.variableName} (${variable.unit.unitCode})`;
+                    // Get site info from historical data with proper error checking
+                    let siteInfoText = 'Site Information';
+                    if (timeSeries.sourceInfo) {
+                        const siteInfo = timeSeries.sourceInfo;
+                        const variableInfo = timeSeries.variable || {};
+                        const unitInfo = variableInfo.unit || {};
+
+                        siteInfoText = `${siteInfo.siteName || 'Unknown Site'} - `;
+                        siteInfoText += `${variableInfo.variableName || 'Unknown Variable'} `;
+                        siteInfoText += `(${unitInfo.unitCode || 'Unknown Units'})`;
+                    }
+
+                    siteInfoElement.textContent = siteInfoText;
 
                     // Combine data
                     allData = historicalValues;
@@ -237,6 +264,10 @@
             // Process and display the data
             function processData() {
                 try {
+                    if (allData.length === 0) {
+                        throw new Error('No data to display');
+                    }
+
                     // Group data by year
                     const yearGroups = groupDataByYear(allData);
 
@@ -378,11 +409,11 @@
                 const dataPoint = event.target;
                 const value = dataPoint.dataset.value;
                 const date = formatDateForDisplay(dataPoint.dataset.date);
-                const qualifiers = dataPoint.dataset.qualifiers;
+                const qualifiers = dataPoint.dataset.qualifiers || 'None';
 
                 tooltip.innerHTML = `
                     <div>${date}</div>
-                    <div>Value: ${value} ft (${(value/25).toFixed(2)} of scale)</div>
+                    <div>Value: ${value} ft (${(value / 25).toFixed(2)} of scale)</div>
                     <div>Qualifiers: ${qualifiers}</div>
                     <div>Scale: 0-25 ft</div>
                 `;
